@@ -3,20 +3,19 @@
 
 # # Automatic Prediction of Lezgi Morpheme Breaks
 # 
-# This program does supervised morphological analysis and glossing of affixes. It is intended to quickly increase the amount of accessible data from low resource, and often endangered, languages. This classifier can be used on any language but it expects 2000-3000 words of cleanly annotated data. 
+# This program does supervised morphological segmentation of all morphemes and glossing of either just affixes or affixes and stems. This classifier can be used on any language but it expects cleanly segmented, glossed, and POS-tagged (lexical categories) as training data. 
 # 
-# This example is designed for Lezgi [lez], a Nakh-Daghestanian language spoken in Russia and Azerbaijan. Lezgi is an agglutinating language that is overwhelmingly suffixing. The training and test data came from a collection of 21 transcribed oral narratives spoken in the Qusar dialect of northwest Azerbaijan. Nine texts with about 2,500 words were used for training data after having been cleanly annotated with morpheme breaks and part of speech. All but three of affixes were glossed. Many of the stems are not glossed. The FlexText XML export labels each morpheme as stem, suffix, or prefix. 
-# 
-# This program is considered successful if it reaches 80% accuracy. This goal comes from the Pareto Principle - the idea that 20% of one's effort produces 80% of one's results, and vice versa. This program should accurately complete 80% of the annotations, leaving the most interesting and informative 20% for the human linguist to complete.This project was inspired by an ongoing fieldwork project. A native Lezgi speaker who has no background in linguistics has been annotating the collection of texts. She has quickly learned basic morphology and gained FLEx skills. However, simultaneously learning and doing basic linguistic analysis produces inaccurate and inconsistent annotations. It is also time-consuming. Many of the mistakes are due to the repetitive nature of the work. Not every part of speech has inflectional morphology. The annotator is most likely to skip over essential words with simple morphology, such as ergative case-marked arguments, and concentrate on morphologicaly complex words. 
+# This program is intended to quickly increase the amount of accessible data from low resource, and often endangered, languages.  It is considered successful if it reaches 80% accuracy. This goal comes from the Pareto Principle - the idea that 20% of one's effort produces 80% of one's results, and vice versa. This program should accurately complete 80% of the annotations, leaving the most interesting and informative 20% for the human linguist to complete.This project was inspired by an ongoing fieldwork project. A native Lezgi speaker who has no background in linguistics has been annotating the collection of texts. She has quickly learned basic morphology and gained FLEx skills. However, simultaneously learning and doing basic linguistic analysis produces inaccurate and inconsistent annotations. It is also time-consuming. Many of the mistakes are due to the repetitive nature of the work. Not every part of speech has inflectional morphology. The annotator is most likely to skip over essential words with simple morphology, such as ergative case-marked arguments, and concentrate on morphologicaly complex words. 
 # 
 # Once the training is complete, the program should predict morpheme breaks and affix glosses for any text that has been labeled with parts of speech. Identifying parts of speech is required because this seems a reasonable task for a non-linguist native speaker. The data used in this example does include two distinctions in Lezgi that might be difficult without linguistic training. Participles are distinguished from verbs, but Lezgi participles end in a unique letter. Demonstrative pronouns are distinguished from pronouns. This distinction was used primarily because it was already consistently annotated in the data. 
 # 
+# This example uses Lezgi [lez], a Nakh-Daghestanian language spoken in Russia and Azerbaijan. Lezgi is an agglutinating language that is overwhelmingly suffixing. The training and test data came from a collection of 21 transcribed oral narratives spoken in the Qusar dialect of northwest Azerbaijan. Nine texts with about 2,500 words were used for training data after having been cleanly annotated with morpheme breaks and part of speech. All but three of affixes were glossed. Many of the stems are not glossed. The FlexText XML export labels each morpheme as stem, suffix, or prefix. 
 
-#  ## Preprocessing Data
+# ## Preprocessing Data
 #  
-# This process assumes that 1) the data has been analyzed in FLEx and exported as a FlexText, then saved with an .xml file extension, 2) words have been annotated in FLEx for part of speech, (for this example - verb, participle, adjective, adverb, noun/proper noun, particle, (personal) pronoun, demonstrative, and postposition), 3) morpheme breaks are consistent, and 4) all affixes, but not stems, are glossed.
+# This process assumes that 1) the data has been analyzed in FLEx and exported as a FlexText, then saved with an .xml file extension, 2) words have been annotated in FLEx for part of speech, (for the example - verb, participle, adjective, adverb, noun/proper noun, particle, (personal) pronoun, demonstrative, and postposition), 3) morpheme breaks are consistent, and 4) all affixes, but not necessarily stems, are glossed.
 
-# In[1]:
+# In[2]:
 
 #API for parsing XML docs
 import xml.etree.ElementTree as ET
@@ -29,10 +28,12 @@ import pycrfsuite
 from collections import Counter
 
 
-# In[2]:
+# The function below takes the data from the FLExText XML export. The data is read from the XML file and broken down by morphemes. The POS and a "label" is associated with each word. The label for stems is "stem" if stems are not being glossed, otherwise it is their gloss as it always is for affixes.
 
-def XMLtoWords(filename):
-    '''Takes FLExText text as .xml. Returns data as list: [[[[[[morpheme, gloss], pos],...],words],sents]].
+# In[5]:
+
+def XMLtoWords(filename,stems=False):
+    '''Takes FLExText text as .xml. Returns data as list: [[[[[[morpheme, gloss], pos],...],lexemes],sents]].
     Ignores punctuation. Morph_types can be: stem, suffix, prefix, or phrase when lexical item is made up of two words.'''
     
     datalists = []
@@ -59,14 +60,14 @@ def XMLtoWords(filename):
                                             morpheme = []
                                             #note morph type 
                                             morph_type = morph.get('type')
-                                            #Treat MWEs or unlabled morphemes as stems.
+                                            #Treat MWEs or unlabeled morphemes as stems.
                                             if morph_type == None or morph_type == 'phrase':
                                                 morph_type = 'stem'                                            
                                             for item in morph:
                                                 #get morpheme token
                                                 if item.get('type') == 'txt':
                                                     form = item.text
-                                                    #get rid of hyphens demarcating affixes
+                                                    #without hyphens demarcating affixes
                                                     if morph_type == 'suffix':
                                                         form = form[1:]
                                                     if morph_type == 'prefix':
@@ -75,9 +76,12 @@ def XMLtoWords(filename):
                                                 #get affix glosses
                                                 if item.get('type') == 'gls' and morph_type != 'stem':
                                                     morpheme.append(item.text)
-                                            #get stem "gloss" = 'stem'
-                                            if morph_type == 'stem':
-                                                morpheme.append(morph_type)
+                                                #get stem "gloss":'stem' or actual gloss
+                                                    if item.get('type') == 'gls' and morph_type == 'stem':
+                                                        if not stems:
+                                                            morpheme.append(morph_type)
+                                                        else:
+                                                            morpheme.append(item.text)
                                             lexeme.append(morpheme)
                                     #get word's POS
                                     if node.get('type') == 'pos':
@@ -87,7 +91,9 @@ def XMLtoWords(filename):
     return datalists
 
 
-# In[3]:
+# Here the morphemes are broken down by letter. Each letter is associated with the word's POS tag and a BIO tag is added to its label/gloss. "B" denotes the initial letter of a morpheme. "I" marks non-initial letters.
+
+# In[6]:
 
 def WordsToLetter(wordlists):
     '''Takes data from XMLtoWords: [[[[[[morpheme, gloss], pos],...],words],sents]]. 
@@ -121,9 +127,9 @@ def WordsToLetter(wordlists):
     return letterlists
 
 
-# The call below takes the data from the FLExText XML export. The data is read from the XML file and broken down by morphemes. Then it is broken down by letter. Each letter is associated with the word's part of speech tag and a BIO label. The BIO label for stems is "stem". The label for affixes is their gloss. "B" denotes the initial letter of a morpheme. I marks non-initial letters.
+# Below two functions above are called and the data is split into train/test sets.
 # 
-# With a corpus of a little less than 2,500 words, I originally tried a 90/10 split. The accuracy results ranged from 92% to 97% but the test data was seeing a dozen or less labels. An 80/20 random split ranges less than 2% in accuracy, but still averages about 94%. However, the number of labels the test data encounters is nearly doubled.
+# With a corpus of a little less than 2,500 words, I originally tried a 90/10 split. The accuracy results ranged from 92% to 97% but the test data was seeing a dozen or less labels. An 80/20 random split results has less range in accuracy (within 2%) but still averages 94%. The number of labels the test data encounters, however, is nearly doubled.
 
 # In[4]:
 
